@@ -240,6 +240,9 @@ class Photo(db.Model):
     collectors = db.relationship('Collect', back_populates='collected', cascade='all')
     tags = db.relationship('Tag', secondary=tagging, back_populates='photos')
 
+    alt_text = db.Column(db.String(500))
+    detected_objects = db.Column(db.String(500))
+
 
 @whooshee.register_model('name')
 class Tag(db.Model):

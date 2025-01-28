@@ -11,6 +11,11 @@ from flask import render_template, flash, redirect, url_for, current_app, \
     send_from_directory, request, abort, Blueprint
 from flask_login import login_required, current_user
 from sqlalchemy.sql.expression import func
+from azure.cognitiveservices.vision.computervision import ComputerVisionClient
+from msrest.authentication import CognitiveServicesCredentials
+import json
+from configparser import ConfigParser
+
 
 from albumy.decorators import confirm_required, permission_required
 from albumy.extensions import db
@@ -122,15 +127,57 @@ def upload():
     if request.method == 'POST' and 'file' in request.files:
         f = request.files.get('file')
         filename = rename_image(f.filename)
-        f.save(os.path.join(current_app.config['ALBUMY_UPLOAD_PATH'], filename))
+        #f.save(os.path.join(current_app.config['ALBUMY_UPLOAD_PATH'], filename))
+        filepath = os.path.join(current_app.config['ALBUMY_UPLOAD_PATH'], filename)
+        f.save(filepath)
+
+
+        # Add AZURE ML Processing
+        config = ConfigParser()
+        config.read('config.ini')
+        print("Config loaded:", config['azure'])
+        endpoint = config['azure']['endpoint']
+        key = config['azure']['key']
+        client = ComputerVisionClient(endpoint=endpoint, credentials=CognitiveServicesCredentials(key))
+        print("Client created:", client)
+        print("Processing image:", filepath)
+
+                
+        with open(filepath, 'rb') as image:
+            description = client.describe_image_in_stream(image)
+            print("Caption text:", description.captions[0].text if description.captions else "No caption")
+
+            image.seek(0)
+            objects = client.detect_objects_in_stream(image)
+            print("Detected objects:", [obj.object_property for obj in objects.objects])
+
+            
+            alt_text = description.captions[0].text if description.captions else ""
+        detected_objects = json.dumps([obj.object_property for obj in objects.objects])
+
+
         filename_s = resize_image(f, filename, current_app.config['ALBUMY_PHOTO_SIZE']['small'])
         filename_m = resize_image(f, filename, current_app.config['ALBUMY_PHOTO_SIZE']['medium'])
         photo = Photo(
             filename=filename,
             filename_s=filename_s,
             filename_m=filename_m,
+            alt_text=alt_text,
+            detected_objects=detected_objects,
+
             author=current_user._get_current_object()
         )
+
+        # Tag
+        for obj in objects.objects:
+            tag_name = obj.object_property
+            tag = Tag.query.filter_by(name=tag_name).first()
+            if tag is None:
+                tag = Tag(name=tag_name)
+                db.session.add(tag)
+            photo.tags.append(tag)
+
+
         db.session.add(photo)
         db.session.commit()
     return render_template('main/upload.html')
